@@ -1,0 +1,3 @@
+# Store and check out text files with LF endings on every platform,
+# so Windows, macOS and Linux all see identical files.
+* text=auto eol=lf

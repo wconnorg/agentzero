@@ -1,0 +1,9 @@
+node_modules/
+
+# Secrets: only .env.example is ever committed.
+.env
+.env.*
+!.env.example
+
+# local-only Claude Code settings
+.claude/settings.local.json

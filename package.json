@@ -1,0 +1,24 @@
+{
+  "name": "agentzero",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.ts",
+    "typecheck": "tsc",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run test",
+    "secret:new": "node scripts/new-secret.ts",
+    "discord:check": "node --env-file-if-exists=.env scripts/check-discord.ts"
+  },
+  "dependencies": {
+    "discord.js": "14.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5"
+  }
+}
