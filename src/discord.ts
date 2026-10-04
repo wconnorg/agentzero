@@ -16,6 +16,19 @@ export const isDiscordCode = (error: unknown, code: RESTJSONErrorCodes) =>
 export const isMissingPermission = (error: unknown) =>
   isDiscordCode(error, RESTJSONErrorCodes.MissingPermissions) || isDiscordCode(error, RESTJSONErrorCodes.MissingAccess);
 
+/** "A", "A and B", "A, B and C". */
+export const listOf = (items: readonly string[]) =>
+  items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+
+/**
+ * The clicks that give the bot permissions in one channel. An allow for the bot's own role
+ * on the channel itself wins over a deny for @everyone there or on its category, which is
+ * how a locked-down channel usually shuts the bot out too.
+ */
+export const channelFix = (channelName: string, botRoleName: string, permissions: readonly string[]) =>
+  `In Discord: right-click #${channelName}, Edit Channel, Permissions, add the "${botRoleName}" role ` +
+  `and allow ${listOf(permissions)}, then start the bot again.`;
+
 /** What the bot needs in the server; Manage Channels is granted on the Academy Users channel only. */
 const INVITE_PERMISSIONS =
   PermissionFlagsBits.ManageRoles |

@@ -1,4 +1,5 @@
 import { PermissionFlagsBits, type Guild, type GuildTextBasedChannel, type Message } from "discord.js";
+import { channelFix, listOf } from "./discord.ts";
 import { log } from "./log.ts";
 
 /**
@@ -44,12 +45,17 @@ export async function openVerifyChannel(guild: Guild, channelId: string): Promis
   if (!channel?.isTextBased()) {
     throw new Error("VERIFY_CHANNEL_ID names no text channel in the server");
   }
-  const permissions = channel.permissionsFor(await guild.members.fetchMe());
+  const me = await guild.members.fetchMe();
+  const permissions = channel.permissionsFor(me);
   const missing = Object.entries(NEEDED_IN_CHANNEL)
     .filter(([, flag]) => !permissions.has(flag))
     .map(([name]) => name);
   if (missing.length > 0) {
-    throw new Error(`in the verify channel the bot needs: ${missing.join(", ")}`);
+    // All four, not only the missing ones, so a later change for @everyone cannot shut it out again.
+    throw new Error(
+      `the bot cannot work in the verify channel #${channel.name}: it lacks ${listOf(missing)}. ` +
+        channelFix(channel.name, me.roles.botRole?.name ?? me.displayName, Object.keys(NEEDED_IN_CHANNEL)),
+    );
   }
   return channel;
 }

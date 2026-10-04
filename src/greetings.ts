@@ -1,4 +1,5 @@
 import { PermissionFlagsBits, type Guild, type GuildTextBasedChannel } from "discord.js";
+import { channelFix } from "./discord.ts";
 import { log } from "./log.ts";
 
 /**
@@ -28,9 +29,12 @@ export async function openGreetingChannel(
     log.warn(`${variable} names no text channel in the server: those greetings are off`);
     return undefined;
   }
-  const permissions = channel.permissionsFor(await guild.members.fetchMe());
-  if (!permissions.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
-    log.warn(`in the ${variable} channel the bot needs View Channel and Send Messages`);
+  const me = await guild.members.fetchMe();
+  if (!channel.permissionsFor(me).has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) {
+    log.warn(
+      `the bot cannot post in #${channel.name} (${variable}), so those greetings will fail. ` +
+        channelFix(channel.name, me.roles.botRole?.name ?? me.displayName, ["View Channel", "Send Messages"]),
+    );
   }
   return channel;
 }
