@@ -8,24 +8,29 @@ import {
   type Guild,
   type GuildTextBasedChannel,
 } from "discord.js";
+import { createCalendar, openCalendarChannel, postAtLabel, TICK_MS as CALENDAR_TICK_MS } from "./calendar.ts";
 import { ConfigError, readConfig, type Config } from "./config.ts";
 import { createMemberList, describeDiscordError, inviteUrl, isDiscordCode, isMissingPermission } from "./discord.ts";
 import { errorMessage, log } from "./log.ts";
 import { createRankSync } from "./rank-sync.ts";
 import { repeat } from "./schedule.ts";
 import { farewell, greeting, openGreetingChannel } from "./greetings.ts";
-import { createAcademyUsersChannel } from "./stats.ts";
-import { VERIFY_EMOJI, ensureVerifyMessage, fetchReactors, openVerifyChannel, setVerified } from "./verify.ts";
+import { createUsersChannel } from "./stats.ts";
+import { ALERTS_EMOJI, ALERTS_TEXT } from "./alerts.ts";
+import { startReactionRole, type ReactionRole } from "./reaction-role.ts";
+import { VERIFY_EMOJI, VERIFY_TEXT } from "./verify.ts";
 import { createWebsite } from "./website.ts";
 
 /**
  * Agent Zero, ZeroCorps' only Discord bot, for one server:
  *  - the verified role, held while a member's ✅ is on its verify message (the bot's own
- *    business);
+ *    business), and likewise the optional alerts role, held while a member's 🔔 is on the
+ *    alerts message;
  *  - "Welcome @user!" in the welcome channel and "Seeya @user!" in the goodbye channel;
  *  - the rank roles, synced from zerocorps.org on start and every few minutes, and
  *    restored when a member joins;
- *  - optionally, an "Academy Users: N" channel counting linked Discord accounts.
+ *  - optionally, a "Users: N" channel counting ZeroCorps accounts;
+ *  - optionally, the day's red and orange folders each morning in the calendar channel.
  */
 
 function loadConfig(): Config {
@@ -48,7 +53,7 @@ const client = new Client({
   // departure even for a member the cache does not hold.
   partials: [Partials.Message, Partials.Reaction, Partials.User, Partials.GuildMember],
   // A channel rename over Discord's limit fails at once instead of waiting up to ten
-  // minutes, which would hold up the rank sync (stats.ts). Everything else still waits.
+  // minutes for Discord to allow it (stats.ts). Everything else still waits.
   rest: { rejectOnRateLimit: (limit) => limit.method.toUpperCase() === "PATCH" && limit.route === "/channels/:id" },
 });
 
@@ -72,87 +77,81 @@ async function start(ready: Client<true>) {
   if (!guild) throw new Error(notInServer(ready));
   await checkRoles(guild);
 
-  const message = await ensureVerifyMessage(await openVerifyChannel(guild, config.verifyChannelId), ready.user.id);
   const welcomeChannel = config.welcomeChannelId
     ? await openGreetingChannel(guild, config.welcomeChannelId, "WELCOME_CHANNEL_ID")
     : undefined;
   const goodbyeChannel = config.goodbyeChannelId
     ? await openGreetingChannel(guild, config.goodbyeChannelId, "GOODBYE_CHANNEL_ID")
     : undefined;
+  const calendarChannel = config.calendarChannelId
+    ? await openCalendarChannel(guild, config.calendarChannelId)
+    : undefined;
   const members = createMemberList(guild);
   const ranks = createRankSync(guild, members, website, config.rankRoles);
-  const reactors = new Set<string>();
-
-  // One change at a time for each member, so a quick ✅ and un-✅ end the right way round.
-  const turns = new Map<string, Promise<void>>();
-  const verified = (memberId: string, on: boolean) => {
-    const turn = (turns.get(memberId) ?? Promise.resolve()).then(async () => {
-      try {
-        await setVerified(guild, memberId, config.verifiedRoleId, on);
-        log.info(`${on ? "verified" : "unverified"} ${memberId}`);
-      } catch (error) {
-        if (isDiscordCode(error, RESTJSONErrorCodes.UnknownMember)) return;
-        log.error(`could not ${on ? "give" : "take"} the verified role for ${memberId}: ${describeDiscordError(error)}`);
-      }
-    });
-    turns.set(memberId, turn);
-    void turn.then(() => turns.get(memberId) === turn && turns.delete(memberId));
-    return turn;
-  };
-  const isVerifyReaction = (reaction: { message: { id: string }; emoji: { name: string | null } }) =>
-    reaction.message.id === message.id && reaction.emoji.name === VERIFY_EMOJI;
-
-  // ✅ changes that arrive while a catch-up is reading the list, applied on top of what it read.
-  const liveChanges = new Map<string, boolean>();
-  let catchingUp = false;
-  const liveReaction = (userId: string, on: boolean) => {
-    if (on) reactors.add(userId);
-    else reactors.delete(userId);
-    if (catchingUp) liveChanges.set(userId, on);
-    void verified(userId, on);
-  };
+  // The verify message is the bot's reason to be: without it, stop and say why.
+  const verify = await startReactionRole(guild, members, ready.user.id, {
+    messageName: "verify",
+    roleName: "verified",
+    channelVariable: "VERIFY_CHANNEL_ID",
+    channelId: config.verifyChannelId,
+    emoji: VERIFY_EMOJI,
+    text: VERIFY_TEXT,
+    roleId: config.verifiedRoleId,
+    gave: (id) => `verified ${id}`,
+    took: (id) => `unverified ${id}`,
+  });
+  // The alerts message is optional: a problem with its channel only switches it off.
+  let alerts: ReactionRole | undefined;
+  if (config.alertsChannelId && config.alertsRoleId) {
+    try {
+      alerts = await startReactionRole(guild, members, ready.user.id, {
+        messageName: "alerts",
+        roleName: "alerts",
+        channelVariable: "ALERTS_CHANNEL_ID",
+        channelId: config.alertsChannelId,
+        emoji: ALERTS_EMOJI,
+        text: ALERTS_TEXT,
+        roleId: config.alertsRoleId,
+        gave: (id) => `alerts on for ${id}`,
+        took: (id) => `alerts off for ${id}`,
+      });
+    } catch (error) {
+      log.warn(`the alerts message is off: ${errorMessage(error)}`);
+    }
+  }
+  const reactionRoles = alerts ? [verify, alerts] : [verify];
 
   // Listen before reading the reactions, so none made in between is missed.
   ready.on(Events.MessageReactionAdd, (reaction, user) => {
-    if (!isVerifyReaction(reaction) || user.id === ready.user.id || user.bot) return;
-    liveReaction(user.id, true);
+    for (const role of reactionRoles) void role.reacted(reaction, user, true);
   });
   ready.on(Events.MessageReactionRemove, (reaction, user) => {
-    if (!isVerifyReaction(reaction) || user.id === ready.user.id || user.bot) return;
-    liveReaction(user.id, false);
+    for (const role of reactionRoles) void role.reacted(reaction, user, false);
   });
-  // A moderator cleared the reactions: put the bot's ✅ back so members can still verify.
-  // Nobody loses the verified role for this; only removing their own ✅ does that.
-  const cleared = () => {
-    reactors.clear();
-    message.react(VERIFY_EMOJI).catch((error: unknown) => {
-      const reason = isMissingPermission(error)
-        ? "the bot needs Add Reactions and Read Message History in the verify channel"
-        : errorMessage(error);
-      log.error(`could not put ${VERIFY_EMOJI} back on the verify message: ${reason}`);
-    });
-  };
   ready.on(Events.MessageReactionRemoveAll, (removedFrom) => {
-    if (removedFrom.id === message.id) cleared();
+    for (const role of reactionRoles) role.allCleared(removedFrom.id);
   });
   ready.on(Events.MessageReactionRemoveEmoji, (reaction) => {
-    if (isVerifyReaction(reaction)) cleared();
+    for (const role of reactionRoles) role.emojiCleared(reaction);
   });
 
   const post = (channel: GuildTextBasedChannel | undefined, content: string, ping: string[], about: string) => {
-    channel?.send({ content, allowedMentions: { users: ping } }).catch((error: unknown) => {
-      const reason = isMissingPermission(error)
-        ? `the bot needs View Channel and Send Messages in #${channel.name}`
-        : errorMessage(error);
-      log.error(`could not post the ${about}: ${reason}`);
-    });
+    channel
+      ?.send({ content, allowedMentions: { users: ping } })
+      .then(() => log.info(`posted the ${about} in #${channel.name}`))
+      .catch((error: unknown) => {
+        const reason = isMissingPermission(error)
+          ? `the bot needs View Channel and Send Messages in #${channel.name}`
+          : errorMessage(error);
+        log.error(`could not post the ${about}: ${reason}`);
+      });
   };
 
   ready.on(Events.GuildMemberAdd, (member) => {
     if (member.guild.id !== guild.id || member.user.bot) return;
     post(welcomeChannel, greeting(member.id), [member.id], `greeting for ${member.id}`);
-    // Back in the server with their ✅ still on the message.
-    if (reactors.has(member.id)) void verified(member.id, true);
+    // Back in the server with their reaction still on a message: the role comes back.
+    for (const role of reactionRoles) void role.rejoined(member.id);
     ranks.restore(member).catch((error: unknown) => {
       log.error(`could not restore the rank role of ${member.id}: ${errorMessage(error)}; the next sync tries again`);
     });
@@ -163,42 +162,19 @@ async function start(ready: Client<true>) {
     post(goodbyeChannel, farewell(member.id), [], `farewell for ${member.id}`);
   });
 
-  /**
-   * Reads who has a ✅ now and gives Verified to any of them who lacks it: at start, and
-   * whenever the connection comes back, because reactions made while the bot was away never
-   * arrive as events. It never takes Verified away (members verified before the verify
-   * message existed keep it).
-   */
+  // Who has reacted now: at start, and whenever the connection comes back, because reactions
+  // made while the bot was away never arrive as events (reaction-role.ts says what it does).
   const catchUp = async () => {
-    if (catchingUp) return;
-    catchingUp = true;
-    try {
-      const now = await fetchReactors(message);
-      now.delete(ready.user.id);
-      for (const [id, on] of liveChanges) {
-        if (on) now.add(id);
-        else now.delete(id);
-      }
-      reactors.clear();
-      for (const id of now) reactors.add(id);
-      const everyone = await members();
-      for (const id of reactors) {
-        const member = everyone.get(id);
-        if (member && !member.user.bot && !member.roles.cache.has(config.verifiedRoleId)) await verified(id, true);
-      }
-    } finally {
-      catchingUp = false;
-      liveChanges.clear();
-    }
+    for (const role of reactionRoles) await role.catchUp();
   };
   await catchUp();
-  log.info(`verify message ready; ${reactors.size} member(s) have reacted`);
+  for (const role of reactionRoles) log.info(`${role.messageName} message ready; ${role.count} member(s) have reacted`);
 
   // Back after a gap (a resume, or signing in afresh after a long sleep): catch up again.
   const catchUpAgain = (after: string) => {
     catchUp()
-      .then(() => log.info(`caught up on ${VERIFY_EMOJI} after ${after}`))
-      .catch((error: unknown) => log.error(`could not catch up on ${VERIFY_EMOJI} after ${after}: ${errorMessage(error)}`));
+      .then(() => log.info(`caught up on reactions after ${after}`))
+      .catch((error: unknown) => log.error(`could not catch up on reactions after ${after}: ${errorMessage(error)}`));
   };
   ready.on(Events.ShardResume, () => catchUpAgain("a reconnect"));
   ready.on(Events.ShardReady, () => catchUpAgain("signing in again"));
@@ -213,18 +189,25 @@ async function start(ready: Client<true>) {
   });
   log.info(
     `greetings: ${welcomeChannel ? `welcome in #${welcomeChannel.name}` : "no welcome"}, ` +
-      `${goodbyeChannel ? `goodbye in #${goodbyeChannel.name}` : "no goodbye"}`,
+      `${goodbyeChannel ? `goodbye in #${goodbyeChannel.name}` : "no goodbye"}; ` +
+      `calendar: ${calendarChannel ? `#${calendarChannel.name} at ${postAtLabel()} (${config.calendarCurrencies.join(", ")})` : "off"}`,
   );
 
-  const academyUsers = config.statsChannelId
-    ? createAcademyUsersChannel(guild, config.statsChannelId)
-    : undefined;
-  loops.push(
-    repeat("rank sync", config.syncIntervalMs, async () => {
-      const linked = await ranks.syncAll();
-      await academyUsers?.show(linked);
-    }),
-  );
+  loops.push(repeat("rank sync", config.syncIntervalMs, () => ranks.syncAll()));
+  if (config.statsChannelId) {
+    // Its own loop, so a failed count never delays the roles, nor the other way round.
+    const users = createUsersChannel(guild, config.statsChannelId);
+    loops.push(
+      repeat("users count", config.syncIntervalMs, async () => {
+        const { academyMembers } = await website.stats();
+        await users.show(academyMembers);
+      }),
+    );
+  }
+  if (calendarChannel) {
+    const calendar = createCalendar(calendarChannel, ready.user.id, config.calendarCurrencies);
+    loops.push(repeat("calendar", CALENDAR_TICK_MS, () => calendar.tick()));
+  }
 }
 
 /** The servers the bot is in and its invite link: enough to tell a missing invite from a wrong GUILD_ID. */
@@ -245,7 +228,8 @@ async function checkRoles(guild: Guild) {
   if (!me.permissions.has(PermissionFlagsBits.ManageRoles)) {
     log.warn("the bot lacks Manage Roles in the server: it cannot give any role");
   }
-  const roles = [["VERIFIED_ROLE_ID", config.verifiedRoleId], ...config.rankRoles] as const;
+  const roles: [string, string][] = [["VERIFIED_ROLE_ID", config.verifiedRoleId], ...config.rankRoles];
+  if (config.alertsRoleId) roles.push(["ALERTS_ROLE_ID", config.alertsRoleId]);
   for (const [label, roleId] of roles) {
     const role = await guild.roles.fetch(roleId);
     if (!role) throw new Error(`the ${label} role id names no role in the server`);

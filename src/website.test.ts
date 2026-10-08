@@ -56,13 +56,13 @@ describe("the website client", () => {
     const { website } = fakeWebsite(
       json(200, {
         members: [
-          { discordId: ID, rank: "rookie" },
+          { discordId: ID, rank: "bronze" },
           { discordId: "223456789012345678", rank: null },
         ],
       }),
     );
     assert.deepEqual(await website.ranks(), [
-      { discordId: ID, rank: "rookie" },
+      { discordId: ID, rank: "bronze" },
       { discordId: "223456789012345678", rank: null },
     ]);
   });
@@ -71,7 +71,7 @@ describe("the website client", () => {
     const { website } = fakeWebsite(
       json(200, {
         members: [
-          { discordId: ID, rank: "rookie" },
+          { discordId: ID, rank: "bronze" },
           { discordId: "not-an-id", rank: null },
         ],
       }),
@@ -85,8 +85,8 @@ describe("the website client", () => {
   });
 
   it("reads a linked profile, keeping only the rank", async () => {
-    const { website, calls } = fakeWebsite(json(200, { linked: true, username: "trader_99", rank: "rookie" }));
-    assert.deepEqual(await website.profile(ID), { linked: true, rank: "rookie" });
+    const { website, calls } = fakeWebsite(json(200, { linked: true, username: "trader_99", rank: "bronze" }));
+    assert.deepEqual(await website.profile(ID), { linked: true, rank: "bronze" });
     assert.equal(calls[0]?.url, `${ORIGIN}/api/internal/discord/${ID}/profile`);
   });
 
@@ -104,6 +104,20 @@ describe("the website client", () => {
     const { website, calls } = fakeWebsite();
     await rejectsWith(website.profile("../stats"), "bad_request");
     assert.equal(calls.length, 0);
+  });
+
+  it("reads the accounts count", async () => {
+    const { website, calls } = fakeWebsite(json(200, { academyMembers: 42 }));
+    assert.deepEqual(await website.stats(), { academyMembers: 42 });
+    assert.equal(calls[0]?.url, `${ORIGIN}/api/internal/stats`);
+  });
+
+  it("rejects a count that is not a whole, non-negative number", async () => {
+    const bad = [{}, { academyMembers: "42" }, { academyMembers: -1 }, { academyMembers: 1.5 }, { academyMembers: null }];
+    for (const body of bad) {
+      const { website } = fakeWebsite(json(200, body));
+      await rejectsWith(website.stats(), "unexpected");
+    }
   });
 
   it("explains a wrong secret (401)", async () => {

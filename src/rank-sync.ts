@@ -14,8 +14,7 @@ import type { RankEntry, Website } from "./website.ts";
 const REASON = "ZeroCorps rank, from zerocorps.org";
 
 export type RankSync = {
-  /** Returns how many Discord accounts are linked on the website. */
-  syncAll(): Promise<number>;
+  syncAll(): Promise<void>;
   restore(member: GuildMember): Promise<void>;
 };
 
@@ -73,7 +72,6 @@ export function createRankSync(
         log.info(`rank sync: ${entries.length} linked on the website, ${made} of ${changes.length} role changes made`);
       }
       firstSync = false;
-      return entries.length;
     },
 
     async restore(member) {

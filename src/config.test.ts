@@ -8,7 +8,7 @@ const valid = {
   DISCORD_TOKEN: "token-value",
   GUILD_ID: "100000000000000000",
   VERIFIED_ROLE_ID: "200000000000000000",
-  ROOKIE_ROLE_ID: "300000000000000000",
+  BRONZE_ROLE_ID: "300000000000000000",
   VERIFY_CHANNEL_ID: "400000000000000000",
   ZEROCORPS_API_URL: "https://zerocorps.org/",
   INTERNAL_API_SECRET: SECRET,
@@ -28,12 +28,36 @@ describe("readConfig", () => {
   it("reads a complete .env", () => {
     const config = readConfig(valid);
     assert.equal(config.apiOrigin, "https://zerocorps.org");
-    assert.deepEqual([...config.rankRoles], [["rookie", "300000000000000000"]]);
+    assert.deepEqual([...config.rankRoles], [["bronze", "300000000000000000"]]);
     assert.equal(config.syncIntervalMs, 5 * 60_000);
     assert.equal(config.verifyChannelId, "400000000000000000");
     assert.equal(config.welcomeChannelId, undefined);
     assert.equal(config.goodbyeChannelId, undefined);
     assert.equal(config.statsChannelId, undefined);
+    assert.equal(config.calendarChannelId, undefined);
+    assert.deepEqual(config.calendarCurrencies, ["USD"]);
+    assert.equal(config.alertsChannelId, undefined);
+    assert.equal(config.alertsRoleId, undefined);
+  });
+
+  it("reads the alerts message settings, both or neither", () => {
+    const alerts = { ALERTS_CHANNEL_ID: "900000000000000000", ALERTS_ROLE_ID: "910000000000000000" };
+    const config = readConfig({ ...valid, ...alerts });
+    assert.equal(config.alertsChannelId, alerts.ALERTS_CHANNEL_ID);
+    assert.equal(config.alertsRoleId, alerts.ALERTS_ROLE_ID);
+    assert.match(problemsWith({ ...valid, ALERTS_CHANNEL_ID: alerts.ALERTS_CHANNEL_ID }), /go together/);
+    assert.match(problemsWith({ ...valid, ALERTS_ROLE_ID: alerts.ALERTS_ROLE_ID }), /go together/);
+    assert.match(problemsWith({ ...valid, ...alerts, ALERTS_ROLE_ID: valid.VERIFIED_ROLE_ID }), /must not be the verified role/);
+    assert.match(problemsWith({ ...valid, ...alerts, ALERTS_ROLE_ID: valid.BRONZE_ROLE_ID }), /must not be a rank role/);
+    assert.match(problemsWith({ ...valid, ...alerts, ALERTS_CHANNEL_ID: valid.VERIFY_CHANNEL_ID }), /ALERTS_CHANNEL_ID is the verify channel/);
+  });
+
+  it("reads the calendar settings", () => {
+    const config = readConfig({ ...valid, CALENDAR_CHANNEL_ID: "800000000000000000", CALENDAR_CURRENCIES: " usd, eur " });
+    assert.equal(config.calendarChannelId, "800000000000000000");
+    assert.deepEqual(config.calendarCurrencies, ["USD", "EUR"]);
+    assert.match(problemsWith({ ...valid, CALENDAR_CURRENCIES: "dollars" }), /CALENDAR_CURRENCIES must be currency codes/);
+    assert.match(problemsWith({ ...valid, CALENDAR_CHANNEL_ID: valid.VERIFY_CHANNEL_ID }), /CALENDAR_CHANNEL_ID is the verify channel/);
   });
 
   it("reads the optional settings", () => {
@@ -48,6 +72,15 @@ describe("readConfig", () => {
     assert.equal(config.statsChannelId, "500000000000000000");
     assert.equal(config.welcomeChannelId, "600000000000000000");
     assert.equal(config.goodbyeChannelId, "700000000000000000");
+  });
+
+  it("accepts ROOKIE_ROLE_ID as the earlier name of BRONZE_ROLE_ID", () => {
+    const { BRONZE_ROLE_ID: bronze, ...withoutBronze } = valid;
+    const older = readConfig({ ...withoutBronze, ROOKIE_ROLE_ID: bronze });
+    assert.deepEqual([...older.rankRoles], [["bronze", bronze]]);
+    // Both set: the current name wins.
+    const both = readConfig({ ...valid, ROOKIE_ROLE_ID: "310000000000000000" });
+    assert.deepEqual([...both.rankRoles], [["bronze", bronze]]);
   });
 
   it("keeps greetings out of the verify channel", () => {
@@ -73,7 +106,7 @@ describe("readConfig", () => {
       "DISCORD_TOKEN",
       "GUILD_ID",
       "VERIFIED_ROLE_ID",
-      "ROOKIE_ROLE_ID",
+      "BRONZE_ROLE_ID",
       "VERIFY_CHANNEL_ID",
       "ZEROCORPS_API_URL",
       "INTERNAL_API_SECRET",
@@ -124,11 +157,11 @@ describe("readConfig", () => {
   });
 
   it("refuses ids that are not Discord ids", () => {
-    assert.match(problemsWith({ ...valid, ROOKIE_ROLE_ID: "@Rookie" }), /ROOKIE_ROLE_ID is not a Discord id/);
+    assert.match(problemsWith({ ...valid, BRONZE_ROLE_ID: "@Bronze" }), /BRONZE_ROLE_ID is not a Discord id/);
   });
 
   it("refuses the verified role as a rank role", () => {
-    const message = problemsWith({ ...valid, VERIFIED_ROLE_ID: valid.ROOKIE_ROLE_ID });
+    const message = problemsWith({ ...valid, VERIFIED_ROLE_ID: valid.BRONZE_ROLE_ID });
     assert.match(message, /VERIFIED_ROLE_ID must not be a rank role/);
   });
 

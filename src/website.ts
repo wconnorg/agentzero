@@ -15,9 +15,13 @@ export type RankEntry = { discordId: string; rank: string | null };
 /** Only the rank is kept from a profile; the ZeroCorps username is not needed here. */
 export type Profile = { linked: false } | { linked: true; rank: string | null };
 
+/** The website's counts: `academyMembers` is accounts that are email-verified and have chosen a username. */
+export type Stats = { academyMembers: number };
+
 export type Website = {
   ranks(): Promise<RankEntry[]>;
   profile(discordId: string): Promise<Profile>;
+  stats(): Promise<Stats>;
 };
 
 export type WebsiteErrorKind =
@@ -162,6 +166,12 @@ export function createWebsite({ origin, secret, fetch: fetchImpl = fetch, now = 
       if (!isObject(body) || body.linked !== true || !isRank(body.rank)) throw malformed("profile");
       return { linked: true, rank: body.rank };
     },
+
+    async stats() {
+      const { body } = await get("/api/internal/stats", [200]);
+      if (!isObject(body) || !isCount(body.academyMembers)) throw malformed("stats");
+      return { academyMembers: body.academyMembers };
+    },
   };
 }
 
@@ -172,6 +182,8 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isRank = (value: unknown): value is string | null => value === null || typeof value === "string";
+
+const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 function parseJson(text: string): unknown {
   try {

@@ -11,8 +11,16 @@ export const SNOWFLAKE = /^\d{17,20}$/;
  * on the website is one line here and one variable in `.env`.
  */
 const RANK_ROLE_VARIABLES = {
-  rookie: "ROOKIE_ROLE_ID",
+  bronze: "BRONZE_ROLE_ID",
 } as const;
+
+/**
+ * Earlier names of the same variables, still accepted: the first rank was called Rookie
+ * until 2026-10-05, when the website renamed it Bronze, and the Discord role kept its id.
+ */
+const EARLIER_NAMES: Readonly<Record<string, string>> = {
+  BRONZE_ROLE_ID: "ROOKIE_ROLE_ID",
+};
 
 export type Config = {
   discordToken: string;
@@ -30,9 +38,18 @@ export type Config = {
   apiOrigin: string;
   apiSecret: string;
   syncIntervalMs: number;
-  /** Optional: the channel whose name shows the Academy's member count. */
+  /** Optional: the channel whose name shows how many ZeroCorps accounts there are. */
   statsChannelId: string | undefined;
+  /** Optional: where the day's red and orange folders go each morning. */
+  calendarChannelId: string | undefined;
+  /** The currencies the calendar covers, e.g. ["USD"]. */
+  calendarCurrencies: readonly string[];
+  /** Optional, together: the channel of the alerts message, and the role a 🔔 on it gives. */
+  alertsChannelId: string | undefined;
+  alertsRoleId: string | undefined;
 };
+
+const DEFAULT_CALENDAR_CURRENCIES: readonly string[] = ["USD"];
 
 export class ConfigError extends Error {
   override name = "ConfigError";
@@ -40,7 +57,10 @@ export class ConfigError extends Error {
 
 export function readConfig(env: Record<string, string | undefined>): Config {
   const problems: string[] = [];
-  const read = (name: string) => env[name]?.trim() ?? "";
+  const read = (name: string) => {
+    const earlier = EARLIER_NAMES[name];
+    return env[name]?.trim() || (earlier ? env[earlier]?.trim() : undefined) || "";
+  };
 
   const required = (name: string) => {
     const value = read(name);
@@ -73,14 +93,26 @@ export function readConfig(env: Record<string, string | undefined>): Config {
   }
   const welcomeChannelId = optionalSnowflake("WELCOME_CHANNEL_ID");
   const goodbyeChannelId = optionalSnowflake("GOODBYE_CHANNEL_ID");
-  // Greetings would bury the verify message (the owner keeps three separate channels).
+  const calendarChannelId = optionalSnowflake("CALENDAR_CHANNEL_ID");
+  const alertsChannelId = optionalSnowflake("ALERTS_CHANNEL_ID");
+  // Anything else posted there would bury the verify message (the owner keeps the channels apart).
   for (const [name, id] of [
     ["WELCOME_CHANNEL_ID", welcomeChannelId],
     ["GOODBYE_CHANNEL_ID", goodbyeChannelId],
+    ["CALENDAR_CHANNEL_ID", calendarChannelId],
+    ["ALERTS_CHANNEL_ID", alertsChannelId],
   ] as const) {
     if (id && id === verifyChannelId) {
-      problems.push(`${name} is the verify channel: greetings go in their own channel`);
+      problems.push(`${name} is the verify channel, which holds the verify message only`);
     }
+  }
+
+  const currenciesText = read("CALENDAR_CURRENCIES");
+  const calendarCurrencies = currenciesText
+    ? currenciesText.split(",").map((code) => code.trim().toUpperCase()).filter(Boolean)
+    : DEFAULT_CALENDAR_CURRENCIES;
+  if (calendarCurrencies.some((code) => !/^[A-Z]{2,5}$/.test(code))) {
+    problems.push("CALENDAR_CURRENCIES must be currency codes separated by commas, e.g. USD,EUR");
   }
 
   const rankRoles = new Map<string, string>();
@@ -93,6 +125,17 @@ export function readConfig(env: Record<string, string | undefined>): Config {
   }
   if (new Set(rankRoleIds).size !== rankRoleIds.length) {
     problems.push("two ranks share the same role id");
+  }
+
+  const alertsRoleId = optionalSnowflake("ALERTS_ROLE_ID");
+  if (Boolean(alertsChannelId) !== Boolean(alertsRoleId)) {
+    problems.push("ALERTS_CHANNEL_ID and ALERTS_ROLE_ID go together: set both, or neither");
+  }
+  if (alertsRoleId && alertsRoleId === verifiedRoleId) {
+    problems.push("ALERTS_ROLE_ID must not be the verified role");
+  }
+  if (alertsRoleId && rankRoleIds.includes(alertsRoleId)) {
+    problems.push("ALERTS_ROLE_ID must not be a rank role: the rank sync would take it away");
   }
 
   const apiOrigin = websiteOrigin(required("ZEROCORPS_API_URL"), problems);
@@ -133,6 +176,10 @@ export function readConfig(env: Record<string, string | undefined>): Config {
     apiSecret,
     syncIntervalMs: syncMinutes * 60_000,
     statsChannelId,
+    calendarChannelId,
+    calendarCurrencies,
+    alertsChannelId,
+    alertsRoleId,
   };
 }
 

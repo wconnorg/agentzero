@@ -29,7 +29,7 @@ export const channelFix = (channelName: string, botRoleName: string, permissions
   `In Discord: right-click #${channelName}, Edit Channel, Permissions, add the "${botRoleName}" role ` +
   `and allow ${listOf(permissions)}, then start the bot again.`;
 
-/** What the bot needs in the server; Manage Channels is granted on the Academy Users channel only. */
+/** What the bot needs in the server; Manage Channels is granted on the Users channel only. */
 const INVITE_PERMISSIONS =
   PermissionFlagsBits.ManageRoles |
   PermissionFlagsBits.ViewChannel |

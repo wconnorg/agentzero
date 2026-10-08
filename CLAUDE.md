@@ -26,7 +26,8 @@ third parties as possible; as little personal data as possible.
   the website's dev server) and never the website's database. A new endpoint or field is
   the owner's to take to the website chat.
 - **Ask before adding any new external service**, including where the bot is hosted
-  (it runs on the owner's laptop while testing).
+  (it runs on the owner's laptop while testing). Approved so far: Forex Factory's public
+  calendar feed, read once a day for the calendar post (the owner, 2026-10-08).
 - **The laptop is weak: one agent at a time.** Subagents and workflow agents run one after
   another, never in parallel.
 - **Never hammer the website:** respect 429's `retryAfterSeconds`, and back off on
