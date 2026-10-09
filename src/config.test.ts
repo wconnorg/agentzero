@@ -38,6 +38,12 @@ describe("readConfig", () => {
     assert.deepEqual(config.calendarCurrencies, ["USD"]);
     assert.equal(config.alertsChannelId, undefined);
     assert.equal(config.alertsRoleId, undefined);
+    assert.equal(config.commandsChannelId, undefined);
+  });
+
+  it("reads the music channel, which may not be the verify channel", () => {
+    assert.equal(readConfig({ ...valid, COMMANDS_CHANNEL_ID: "920000000000000000" }).commandsChannelId, "920000000000000000");
+    assert.match(problemsWith({ ...valid, COMMANDS_CHANNEL_ID: valid.VERIFY_CHANNEL_ID }), /COMMANDS_CHANNEL_ID is the verify channel/);
   });
 
   it("reads the alerts message settings, both or neither", () => {

@@ -27,7 +27,13 @@ third parties as possible; as little personal data as possible.
   the owner's to take to the website chat.
 - **Ask before adding any new external service**, including where the bot is hosted
   (it runs on the owner's laptop while testing). Approved so far: Forex Factory's public
-  calendar feed, read once a day for the calendar post (the owner, 2026-10-08).
+  calendar feed, read once a day for the calendar post; and for the music commands, the
+  programs yt-dlp (its unpacked build from its GitHub release, installed by
+  `scripts/update-yt-dlp.ps1`) and FFmpeg (winget) on the PATH, the npm packages
+  @discordjs/voice and @snazzah/davey, the music sites in `ALLOWED_HOSTS` (YouTube,
+  SoundCloud, Bandcamp, Vimeo, Mixcloud) that yt-dlp fetches from, and Spotify's public
+  oEmbed endpoint for the title of a Spotify link (the owner, 2026-10-08, knowing YouTube's
+  terms frown on bots).
 - **The laptop is weak: one agent at a time.** Subagents and workflow agents run one after
   another, never in parallel.
 - **Never hammer the website:** respect 429's `retryAfterSeconds`, and back off on

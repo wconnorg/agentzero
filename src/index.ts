@@ -8,10 +8,11 @@ import {
   type Guild,
   type GuildTextBasedChannel,
 } from "discord.js";
-import { createCalendar, openCalendarChannel, postAtLabel, TICK_MS as CALENDAR_TICK_MS } from "./calendar.ts";
+import { checkPing, createCalendar, openCalendarChannel, postAtLabel, TICK_MS as CALENDAR_TICK_MS } from "./calendar.ts";
 import { ConfigError, readConfig, type Config } from "./config.ts";
 import { createMemberList, describeDiscordError, inviteUrl, isDiscordCode, isMissingPermission } from "./discord.ts";
 import { errorMessage, log } from "./log.ts";
+import { clearCommands, createMusic, registerCommands, type Music } from "./music.ts";
 import { createRankSync } from "./rank-sync.ts";
 import { repeat } from "./schedule.ts";
 import { farewell, greeting, openGreetingChannel } from "./greetings.ts";
@@ -20,6 +21,7 @@ import { ALERTS_EMOJI, ALERTS_TEXT } from "./alerts.ts";
 import { startReactionRole, type ReactionRole } from "./reaction-role.ts";
 import { VERIFY_EMOJI, VERIFY_TEXT } from "./verify.ts";
 import { createWebsite } from "./website.ts";
+import { toolVersions } from "./ytdlp.ts";
 
 /**
  * Agent Zero, ZeroCorps' only Discord bot, for one server:
@@ -30,7 +32,8 @@ import { createWebsite } from "./website.ts";
  *  - the rank roles, synced from zerocorps.org on start and every few minutes, and
  *    restored when a member joins;
  *  - optionally, a "Users: N" channel counting ZeroCorps accounts;
- *  - optionally, the day's red and orange folders each morning in the calendar channel.
+ *  - optionally, the day's red and orange folders each morning in the calendar channel;
+ *  - optionally, music: slash commands in the music channel, played in a voice channel.
  */
 
 function loadConfig(): Config {
@@ -48,7 +51,12 @@ const website = createWebsite({ origin: config.apiOrigin, secret: config.apiSecr
 
 const client = new Client({
   // Server Members is a privileged intent: it must be switched on in the developer portal.
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessageReactions],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildVoiceStates,
+  ],
   // Reactions arrive even for a verify message that has left the message cache, and a
   // departure even for a member the cache does not hold.
   partials: [Partials.Message, Partials.Reaction, Partials.User, Partials.GuildMember],
@@ -58,6 +66,7 @@ const client = new Client({
 });
 
 const loops: { stop(): void }[] = [];
+let music: Music | undefined;
 
 client.once(Events.ClientReady, (ready) => {
   start(ready).catch((error: unknown) => {
@@ -86,6 +95,7 @@ async function start(ready: Client<true>) {
   const calendarChannel = config.calendarChannelId
     ? await openCalendarChannel(guild, config.calendarChannelId)
     : undefined;
+  if (calendarChannel && config.alertsRoleId) await checkPing(guild, calendarChannel, config.alertsRoleId);
   const members = createMemberList(guild);
   const ranks = createRankSync(guild, members, website, config.rankRoles);
   // The verify message is the bot's reason to be: without it, stop and say why.
@@ -176,7 +186,13 @@ async function start(ready: Client<true>) {
       .then(() => log.info(`caught up on reactions after ${after}`))
       .catch((error: unknown) => log.error(`could not catch up on reactions after ${after}: ${errorMessage(error)}`));
   };
-  ready.on(Events.ShardResume, () => catchUpAgain("a reconnect"));
+  // The connection's ups and downs, as they happen: a command that reaches the bot after
+  // Discord's three-second limit was almost always sent during one of these gaps.
+  ready.on(Events.ShardReconnecting, () => log.warn("the connection to Discord dropped; reconnecting"));
+  ready.on(Events.ShardResume, (_shard, replayed) => {
+    log.info(`the connection to Discord is back; Discord replayed ${replayed} event(s) missed meanwhile`);
+    catchUpAgain("a reconnect");
+  });
   ready.on(Events.ShardReady, () => catchUpAgain("signing in again"));
   // A close Discord will not recover from (a reset token, the intent switched off) would
   // leave the bot running but deaf: stop, and say why.
@@ -190,7 +206,8 @@ async function start(ready: Client<true>) {
   log.info(
     `greetings: ${welcomeChannel ? `welcome in #${welcomeChannel.name}` : "no welcome"}, ` +
       `${goodbyeChannel ? `goodbye in #${goodbyeChannel.name}` : "no goodbye"}; ` +
-      `calendar: ${calendarChannel ? `#${calendarChannel.name} at ${postAtLabel()} (${config.calendarCurrencies.join(", ")})` : "off"}`,
+      `calendar: ${calendarChannel ? `#${calendarChannel.name} at ${postAtLabel()} (${config.calendarCurrencies.join(", ")})` : "off"}` +
+      `${calendarChannel && config.alertsRoleId ? ", pinging the alerts role" : ""}`,
   );
 
   loops.push(repeat("rank sync", config.syncIntervalMs, () => ranks.syncAll()));
@@ -205,9 +222,43 @@ async function start(ready: Client<true>) {
     );
   }
   if (calendarChannel) {
-    const calendar = createCalendar(calendarChannel, ready.user.id, config.calendarCurrencies);
+    const calendar = createCalendar(calendarChannel, ready.user.id, config.calendarCurrencies, {
+      pingRoleId: config.alertsRoleId,
+    });
     loops.push(repeat("calendar", CALENDAR_TICK_MS, () => calendar.tick()));
   }
+  if (config.commandsChannelId) music = await startMusic(ready, guild, config.commandsChannelId);
+  else log.info("music: off (COMMANDS_CHANNEL_ID is not set in .env)");
+  // Commands from an earlier run must not stay in the server with no one answering them.
+  if (!music) await clearCommands(ready, guild.id);
+}
+
+/** The music commands, when the two programs they need are there and the bot may add commands. */
+async function startMusic(ready: Client<true>, guild: Guild, channelId: string): Promise<Music | undefined> {
+  const channel = await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel) {
+    log.warn("COMMANDS_CHANNEL_ID names no channel in the server: music is off");
+    return undefined;
+  }
+  const tools = await toolVersions();
+  if (!tools.ytdlp || !tools.ffmpeg) {
+    const missing = [tools.ytdlp ? "" : "yt-dlp", tools.ffmpeg ? "" : "ffmpeg"].filter(Boolean).join(" and ");
+    const install = tools.ytdlp ? "winget install yt-dlp.FFmpeg" : "npm run ytdlp:update";
+    log.warn(`music is off: ${missing} not found on the PATH. Install with "${install}", then start the bot again`);
+    return undefined;
+  }
+  if (!(await registerCommands(ready, guild.id))) return undefined;
+  const player = createMusic(guild, channelId);
+  ready.on(Events.InteractionCreate, (interaction) => {
+    if (interaction.isChatInputCommand() && interaction.guildId === guild.id) void player.handle(interaction);
+  });
+  // The last listener left a voice channel: no point playing on.
+  ready.on(Events.VoiceStateUpdate, (before) => {
+    const left = before.channel;
+    if (left && left.guild.id === guild.id && !left.members.some((member) => !member.user.bot)) player.emptied(left.id);
+  });
+  log.info(`music: commands in #${channel.name}; yt-dlp ${tools.ytdlp}, ffmpeg ${tools.ffmpeg}`);
+  return player;
 }
 
 /** The servers the bot is in and its invite link: enough to tell a missing invite from a wrong GUILD_ID. */
@@ -241,6 +292,7 @@ async function checkRoles(guild: Guild) {
 
 async function shutdown(code: number) {
   for (const loop of loops) loop.stop();
+  music?.shutdown();
   await client.destroy();
   process.exit(code);
 }

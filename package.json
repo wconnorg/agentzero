@@ -13,9 +13,11 @@
     "check": "npm run typecheck && npm run test",
     "secret:new": "node scripts/new-secret.ts",
     "discord:check": "node --env-file-if-exists=.env scripts/check-discord.ts",
-    "autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1"
+    "autostart": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/autostart.ps1",
+    "ytdlp:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-yt-dlp.ps1"
   },
   "dependencies": {
+    "@discordjs/voice": "^0.19.2",
     "discord.js": "14.27.0"
   },
   "devDependencies": {

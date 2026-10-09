@@ -20,6 +20,7 @@ const RANK_ROLE_VARIABLES = {
  */
 const EARLIER_NAMES: Readonly<Record<string, string>> = {
   BRONZE_ROLE_ID: "ROOKIE_ROLE_ID",
+  COMMANDS_CHANNEL_ID: "MUSIC_CHANNEL_ID",
 };
 
 export type Config = {
@@ -47,6 +48,8 @@ export type Config = {
   /** Optional, together: the channel of the alerts message, and the role a 🔔 on it gives. */
   alertsChannelId: string | undefined;
   alertsRoleId: string | undefined;
+  /** Optional: the one channel the music commands (/play and the rest) work in. */
+  commandsChannelId: string | undefined;
 };
 
 const DEFAULT_CALENDAR_CURRENCIES: readonly string[] = ["USD"];
@@ -95,12 +98,14 @@ export function readConfig(env: Record<string, string | undefined>): Config {
   const goodbyeChannelId = optionalSnowflake("GOODBYE_CHANNEL_ID");
   const calendarChannelId = optionalSnowflake("CALENDAR_CHANNEL_ID");
   const alertsChannelId = optionalSnowflake("ALERTS_CHANNEL_ID");
+  const commandsChannelId = optionalSnowflake("COMMANDS_CHANNEL_ID");
   // Anything else posted there would bury the verify message (the owner keeps the channels apart).
   for (const [name, id] of [
     ["WELCOME_CHANNEL_ID", welcomeChannelId],
     ["GOODBYE_CHANNEL_ID", goodbyeChannelId],
     ["CALENDAR_CHANNEL_ID", calendarChannelId],
     ["ALERTS_CHANNEL_ID", alertsChannelId],
+    ["COMMANDS_CHANNEL_ID", commandsChannelId],
   ] as const) {
     if (id && id === verifyChannelId) {
       problems.push(`${name} is the verify channel, which holds the verify message only`);
@@ -180,6 +185,7 @@ export function readConfig(env: Record<string, string | undefined>): Config {
     calendarCurrencies,
     alertsChannelId,
     alertsRoleId,
+    commandsChannelId,
   };
 }
 

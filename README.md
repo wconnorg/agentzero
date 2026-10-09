@@ -1,6 +1,6 @@
 # Agent Zero
 
-ZeroCorps' only Discord bot, for one server. It does four things:
+ZeroCorps' only Discord bot, for one server. It does five things:
 
 1. **Verify, welcome and goodbye.** It posts a verify message in the verify channel;
    reacting with ✅ gives Verified, and removing the ✅ takes it away again. The optional
@@ -16,14 +16,20 @@ ZeroCorps' only Discord bot, for one server. It does four things:
 3. **Optionally, "Users: N":** a channel named after how many ZeroCorps accounts there are
    (email-verified, with a username chosen).
 4. **Optionally, the day's red and orange folders:** every morning at 06:00 Chicago time,
-   two hours before the New York open, one line per high (🔴) or medium (🟠) impact event of
-   the day in the chosen currencies, from Forex Factory's calendar, with each time shown in
-   the reader's own time zone. Weekdays always, even to say there is nothing; weekends only
-   when there is something.
+   two hours before the New York open, an embed with one line per high (🔴) or medium (🟠)
+   impact event of the day in the chosen currencies, from Forex Factory's calendar, each
+   time shown in the reader's own time zone, and the alerts role pinged above it when there
+   is one. Weekdays always, even to say there is nothing; weekends only when there is
+   something.
+5. **Optionally, music:** `/play` with a link or a search in the music channel plays it in
+   the voice channel you are in; `/skip`, `/previous`, `/pause`, `/resume`, `/stop` and
+   `/queue` do what they say.
 
-The website is the source of truth for ranks. The bot stores nothing on disk and keeps
-nothing but Discord ids in memory. Besides Discord and the website, it calls only Forex
-Factory's public calendar feed, for the calendar. The contract with the website is
+The website is the source of truth for ranks. The bot stores nothing on disk, and keeps in
+memory nothing but Discord ids and, while music plays, the queue (song titles and links).
+Besides Discord and the website, it calls Forex Factory's public calendar feed, for the
+calendar, and, for music, the sites it plays from (YouTube, SoundCloud and the few others
+listed in `src/tracks.ts`) and Spotify's public oEmbed endpoint. The contract with the website is
 [docs/INTERNAL-API.md](https://github.com/wconnorg/zerocorps/blob/main/docs/INTERNAL-API.md)
 in the website's repository.
 
@@ -34,10 +40,12 @@ in the website's repository.
 - **Bot tab:** copy the token (it goes in `.env` only). Switch **Public Bot** off, and
   switch **Server Members Intent** on (the bot needs it for joins). Message Content and
   Presence stay off.
-- **Invite it:** OAuth2, URL Generator, scope `bot`, or open this link with the
-  application's id in place of `APP_ID`:
-  `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot&permissions=268504128`
-  (Manage Roles, View Channels, Send Messages, Read Message History, Add Reactions).
+- **Invite it:** OAuth2, URL Generator, scopes `bot` and `applications.commands`, or open
+  this link with the application's id in place of `APP_ID`:
+  `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=271649856`
+  (Manage Roles, View Channels, Send Messages, Read Message History, Add Reactions, Connect,
+  Speak). A bot invited before the music commands existed needs this link opened once more,
+  for the `applications.commands` scope; the log says so if it is missing.
 
 ### 2. The server
 
@@ -66,9 +74,33 @@ in the website's repository.
   `STATS_CHANNEL_ID`. The bot renames it to "Users: N" at most every five minutes.
 - **The calendar channel (optional):** the bot needs View Channel, Send Messages and Read
   Message History there (the last one to see whether it already posted today), and its id
-  goes in `CALENDAR_CHANNEL_ID`. It may not be the verify channel.
+  goes in `CALENDAR_CHANNEL_ID`. It may not be the verify channel. For the morning post to
+  ping the alerts role, also allow the bot "Mention @everyone, @here and All Roles" in that
+  channel, or make the role mentionable; the bot warns at start if it can do neither.
 
-### 3. The website (Vercel)
+### 3. Music (optional)
+
+- **On the computer that runs the bot:** `winget install yt-dlp.FFmpeg` for FFmpeg, then
+  `npm run ytdlp:update` for yt-dlp. That installs yt-dlp's unpacked Windows build (checked
+  against the release's checksums) in `%LOCALAPPDATA%\Programs\yt-dlp` and puts it first on
+  your PATH; the one-file `yt-dlp.exe` that winget offers unpacks itself at every start,
+  which costs 15 to 30 seconds per song on a slow computer. YouTube changes often, so run
+  `npm run ytdlp:update` now and then, and whenever `/play` keeps failing.
+- **The commands channel:** the music commands work there and nowhere else; its id goes in
+  `COMMANDS_CHANNEL_ID`. The bot needs Connect and Speak in the voice channels it may play in
+  (the invite link above grants them server-wide).
+- **What it plays:** a link to YouTube, SoundCloud, Bandcamp, Vimeo or Mixcloud (links to
+  anything else are refused, because a link can lead anywhere, this computer included), a
+  Spotify link (looked up by its title, then found on YouTube), or words to search YouTube
+  for. A playlist link plays its first song. One song at a time, one voice channel at a
+  time; it leaves after five minutes of silence, when the last listener leaves, or on
+  `/stop`. Nothing is stored: the audio streams straight through.
+- **When YouTube says "sign in to confirm you're not a bot":** YouTube does that to bots on
+  and off. Updating yt-dlp usually helps; otherwise wait a while. The bot's reply says so.
+- **The small print:** YouTube's terms do not allow bots to stream it; the owner chose to
+  run this knowing that, on a one-server bot. The music stops whenever the laptop sleeps.
+
+### 4. The website (Vercel)
 
 - `INTERNAL_API_SECRET` set in the project's environment for Production (at least 32
   characters), then a redeploy (Deployments, then Redeploy): Vercel only picks up a changed
@@ -80,7 +112,7 @@ in the website's repository.
   the bot (403 Security Checkpoint)", switch off the challenge on automated requests, or add
   a rule letting `/api/internal/` through.
 
-### 4. `.env`
+### 5. `.env`
 
 Copy `.env.example` to `.env` and fill it in. For ids, turn on Developer Mode in Discord
 (User Settings, Advanced) and right-click a server, role or channel, then "Copy ID".
@@ -140,14 +172,15 @@ settings:
 
 1. Install [Node 24 or later](https://nodejs.org) and [Git](https://git-scm.com).
 2. `git clone https://github.com/wconnorg/agentzero.git`, then `npm install` in that folder.
-3. Copy `.env.example` to `.env` and fill it in again:
+3. For music, `winget install yt-dlp.FFmpeg`, then `npm run ytdlp:update` (after `npm install`).
+4. Copy `.env.example` to `.env` and fill it in again:
    - `DISCORD_TOKEN`: developer portal, Agent Zero's application, Bot tab, **Reset Token**
      (Discord never shows the old one again). `npm run discord:check` confirms it is Agent
      Zero's and that the bot is in the server.
    - The server, role and channel ids: right-click each in Discord, "Copy ID".
    - `INTERNAL_API_SECRET`: `npm run secret:new`, paste the new value over Vercel's
      (Production) and redeploy.
-4. `npm run autostart -- install` (Windows), or `npm start` in a terminal.
+5. `npm run autostart -- install` (Windows), or `npm start` in a terminal.
 
 Nothing else was lost with the old computer: the bot keeps no data of its own, and ranks
 live on the website.
@@ -165,13 +198,19 @@ The bot says what to fix in its log. The usual ones:
 | `VERIFY_CHANNEL_ID is not set` | The verify channel's id in `VERIFY_CHANNEL_ID`; `WELCOME_CHANNEL_ID` is the join greetings' channel. |
 | `could not post the greeting` / `farewell` | Allow Agent Zero View Channel and Send Messages in the welcome or goodbye channel. |
 | `the alerts message is off:` | The alerts channel: its id in `ALERTS_CHANNEL_ID`, and the same four permissions as the verify channel. Then restart the bot. |
+| `music is off: yt-dlp ... not found` | `npm run ytdlp:update` on the bot's computer, then restart the bot. |
+| `music is off: ffmpeg not found` | `winget install yt-dlp.FFmpeg`, then restart the bot. |
+| `music is off: the bot cannot add its slash commands` | Open the invite link the log prints once (the `applications.commands` scope), then restart the bot. |
+| `music: yt-dlp: ERROR ...`, or songs that "could not be fetched" | Usually YouTube changing something: `npm run ytdlp:update`, then restart the bot. |
+| `/play reached the bot too late for Discord` | The bot's connection was stale or reconnecting (often right after the laptop woke); the member just tries again. |
 | `could not update the Users channel` | Allow Agent Zero View Channel and Manage Channels on that channel. After a rename by hand, it waits five minutes. |
 | `calendar failed: the bot needs View Channel, Send Messages and Read Message History` | Allow Agent Zero those three in the calendar channel. |
+| `the morning calendar cannot ping @alerts` | Allow Agent Zero "Mention @everyone, @here and All Roles" in the calendar channel, or make the role mentionable. |
 | `calendar failed: Forex Factory answered HTTP 429` | Nothing: the bot waits and tries again, longer after each failure. |
 | `calendar failed: the Forex Factory feed had no events the bot could read` | The feed was empty or changed shape; the bot tries again. If it goes on for days, the feed's format changed and `parseEvent` in `src/calendar.ts` needs a look. |
 | `the website refused the secret (401)` | `INTERNAL_API_SECRET` differs between `.env` and Vercel: `npm run secret:new`, paste into Vercel (Production), redeploy. |
 | `the website's internal API is off (503)` | Set `INTERNAL_API_SECRET` on Vercel (Production) and redeploy. |
-| `Vercel's firewall blocked the bot (403 …)` | Vercel Firewall (step 3). The bot waits 10 minutes between tries. |
+| `Vercel's firewall blocked the bot (403 …)` | Vercel Firewall (step 4). The bot waits 10 minutes between tries. |
 | `the website asked the bot to slow down (429)` | Nothing: the bot waits as long as it is told. |
 | `the website has rank(s) the bot has no role for` | A new rank on the website: add it to `RANK_ROLE_VARIABLES` in `src/config.ts` and its role id to `.env`. Until then, those members get no role for it. |
 
@@ -191,6 +230,8 @@ in a row (up to 30 minutes).
   change there needs a restart too.
 - **A new rank:** one line in `RANK_ROLE_VARIABLES` in `src/config.ts`, one variable in
   `.env` and `.env.example`.
+- **The sites music links may come from** are `ALLOWED_HOSTS` in `src/tracks.ts`; a search
+  always goes to YouTube.
 - **The calendar:** the time is `POST_AT` in `src/calendar.ts` (06:00 Chicago); the
   currencies are `CALENDAR_CURRENCIES` in `.env`; what a line looks like, and any filter on
   which events to show, is `lines` in `src/calendar.ts`.

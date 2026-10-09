@@ -4,11 +4,13 @@ import { errorMessage, log } from "./log.ts";
 
 /**
  * Optional: the day's red and orange folders, posted every morning in the calendar channel
- * (the owner, 2026-10-08). At 06:00 Chicago time, two hours before the New York open, one
- * line per high (🔴) or medium (🟠) impact event of the day in the chosen currencies, each
- * with its time as a Discord timestamp, so everyone reads it in their own time zone. The
- * events come from Forex Factory's public weekly feed, the one outside service the bot
- * uses besides Discord and the website (approved by the owner, 2026-10-08).
+ * (the owner, 2026-10-08). At 06:00 Chicago time, two hours before the New York open, an
+ * embed with the date, one line per high (🔴) or medium (🟠) impact event of the day in the
+ * chosen currencies, each with its time as a Discord timestamp, so everyone reads it in
+ * their own time zone, and a bar colored by the worst of the day. Above it, the alerts role
+ * is mentioned when there is one, which is what pings its members: an embed alone never
+ * does. The events come from Forex Factory's public weekly feed, the one outside service
+ * the bot uses besides Discord and the website (approved by the owner, 2026-10-08).
  *
  * The bot keeps nothing on disk: every minute it looks at the clock, and when the time has
  * come it looks through the channel's messages since then for today's post before making
@@ -31,6 +33,8 @@ const ICONS: ReadonlyMap<string, string> = new Map([
   ["High", "🔴"],
   ["Medium", "🟠"],
 ]);
+/** The embed's bar: red with a red folder, orange with only orange ones, grey on a quiet day. */
+const COLORS = { red: 0xed4245, orange: 0xe67e22, quiet: 0x99aab5 };
 const NONE = "No red or orange folders today.";
 const MAX_LENGTH = 2000;
 const MAX_TITLE = 80;
@@ -117,9 +121,6 @@ function parseEvent(item: unknown): CalendarEvent | undefined {
   return { title: cleaned, country: country.toUpperCase(), impact, time };
 }
 
-/** The first line of the day's post, and what the bot looks for to see whether it posted today. */
-export const header = (day: Day) => `**${day.label}**`;
-
 /** The day's red and orange folders in the chosen currencies, one line each, earliest first. */
 export function lines(events: readonly CalendarEvent[], day: Day, currencies: readonly string[]): string[] {
   return events
@@ -128,45 +129,73 @@ export function lines(events: readonly CalendarEvent[], day: Day, currencies: re
     .map((event) => `${ICONS.get(event.impact)} <t:${Math.floor(event.time / 1000)}:t> ${event.title}`);
 }
 
-/** The post: the day, then the lines, cut to Discord's length with a count of what was left out. */
-export function post(day: Day, eventLines: readonly string[]): string {
-  if (eventLines.length === 0) return `${header(day)}\n${NONE}`;
+/** What the bot sends: the mention that pings (if any) above an embed holding the day. */
+export type CalendarPost = {
+  content?: string;
+  embeds: [{ title: string; description: string; color: number }];
+  allowedMentions: { parse: never[]; roles: string[] };
+};
+
+/** The post for the day; `pingRoleId` is the role to mention above the embed. */
+export function post(day: Day, eventLines: readonly string[], pingRoleId?: string): CalendarPost {
+  const red = eventLines.some((line) => line.startsWith(ICONS.get("High") ?? ""));
+  const color = red ? COLORS.red : eventLines.length > 0 ? COLORS.orange : COLORS.quiet;
+  return {
+    ...(pingRoleId ? { content: `<@&${pingRoleId}>` } : {}),
+    embeds: [{ title: day.label, description: fit(eventLines), color }],
+    allowedMentions: { parse: [], roles: pingRoleId ? [pingRoleId] : [] },
+  };
+}
+
+/** The lines, cut to Discord's length with a count of what was left out. */
+function fit(eventLines: readonly string[]): string {
+  if (eventLines.length === 0) return NONE;
   const shown = [...eventLines];
   for (;;) {
     const left = eventLines.length - shown.length;
-    const text = [header(day), ...shown, ...(left > 0 ? [`… and ${left} more`] : [])].join("\n");
+    const text = [...shown, ...(left > 0 ? [`… and ${left} more`] : [])].join("\n");
     if (text.length <= MAX_LENGTH || shown.length === 0) return text;
     shown.pop();
   }
 }
 
 /** The little of a message, and of a text channel, that the calendar needs; discord.js's fit. */
-export type RecentMessage = { id: string; createdTimestamp: number; author: { id: string }; content: string };
+export type RecentMessage = {
+  id: string;
+  createdTimestamp: number;
+  author: { id: string };
+  content: string;
+  embeds: readonly { title?: string | null }[];
+};
 
 export type CalendarChannel = {
   name: string;
   messages: { fetch(options: { limit: number; before?: string }): Promise<{ values(): Iterable<RecentMessage> }> };
-  send(message: { content: string; allowedMentions: { parse: never[] } }): Promise<unknown>;
+  send(message: CalendarPost): Promise<unknown>;
 };
 
-type Options = { fetch?: typeof fetch; now?: () => number };
+/** Today's post: the embed titled with the day (or, from before embeds, a text starting with it in bold). */
+const isTodays = (message: RecentMessage, day: Day) =>
+  message.embeds.some((embed) => embed.title === day.label) || message.content.startsWith(`**${day.label}**`);
+
+type Options = { fetch?: typeof fetch; now?: () => number; pingRoleId?: string };
 
 export function createCalendar(
   channel: CalendarChannel,
   botId: string,
   currencies: readonly string[],
-  { fetch: fetchImpl = fetch, now = Date.now }: Options = {},
+  { fetch: fetchImpl = fetch, now = Date.now, pingRoleId }: Options = {},
 ) {
   /** The Chicago date of the last post made or found, so the channel is searched once a day. */
   let postedFor: string | undefined;
   const needed = `the bot needs View Channel, Send Messages and Read Message History in #${channel.name}`;
 
   /** Whether today's post is in the channel: its messages since the posting time, newest first. */
-  async function postedToday(todays: string, since: number): Promise<boolean> {
+  async function postedToday(day: Day, since: number): Promise<boolean> {
     let before: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
       const messages = [...(await channel.messages.fetch({ limit: PAGE, before })).values()];
-      if (messages.some((message) => message.author.id === botId && message.content.startsWith(todays))) return true;
+      if (messages.some((message) => message.author.id === botId && isTodays(message, day))) return true;
       const oldest = messages.reduce<RecentMessage | undefined>(
         (found, message) => (!found || message.createdTimestamp < found.createdTimestamp ? message : found),
         undefined,
@@ -186,7 +215,7 @@ export function createCalendar(
       // Today's post can only be from the posting time on (a minute's margin for the clock).
       const since = moment - (day.minutes - POST_MINUTES + 1) * 60_000;
       try {
-        if (await postedToday(header(day), since)) {
+        if (await postedToday(day, since)) {
           postedFor = day.date;
           return;
         }
@@ -200,7 +229,7 @@ export function createCalendar(
         return;
       }
       try {
-        await channel.send({ content: post(day, todaysLines), allowedMentions: { parse: [] } });
+        await channel.send(post(day, todaysLines, pingRoleId));
       } catch (error) {
         throw new Error(isMissingPermission(error) ? needed : errorMessage(error));
       }
@@ -251,4 +280,21 @@ export async function openCalendarChannel(guild: Guild, channelId: string): Prom
     );
   }
   return channel;
+}
+
+/**
+ * Whether the morning post can ping the role: Discord only delivers a role mention from a
+ * bot that may mention every role in the channel, or for a role anyone may mention. Warns
+ * once at start; fixing it in Discord needs no restart.
+ */
+export async function checkPing(guild: Guild, channel: GuildTextBasedChannel, roleId: string): Promise<void> {
+  const role = await guild.roles.fetch(roleId).catch(() => null);
+  if (!role) return;
+  const me = await guild.members.fetchMe();
+  if (role.mentionable || channel.permissionsFor(me).has(PermissionFlagsBits.MentionEveryone)) return;
+  log.warn(
+    `the morning calendar cannot ping @${role.name}: in Discord, right-click #${channel.name}, Edit Channel, ` +
+      `Permissions, and allow the bot's role "Mention @everyone, @here and All Roles"; or make @${role.name} ` +
+      "mentionable in Server Settings, Roles",
+  );
 }

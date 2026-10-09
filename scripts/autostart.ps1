@@ -159,9 +159,12 @@ function Install-Task {
   # Half a minute after signing in, so the network is up before the bot's first try.
   $trigger.Delay = 'PT30S'
   $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
-  # No time limit (the default stops a task after three days), and a laptop runs on battery.
+  # No time limit (the default stops a task after three days), a laptop runs on battery, and
+  # above-normal priority (4; the default 7 is below normal), or the bot and everything it
+  # starts get starved whenever the apps on the laptop are busy, and cannot answer a command
+  # within the three seconds Discord allows.
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable
+    -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable -Priority 4
   Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
     -Settings $settings -Force | Out-Null
   Write-Host "Registered the Windows task `"$TaskName`": it starts the bot whenever you sign in to Windows, and again after a crash."
@@ -188,6 +191,9 @@ function Add-LogLine([string] $Text) {
 function Invoke-Bot {
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   [System.IO.File]::WriteAllText($LogFile, '', $Utf8)
+  # The PATH as the registry has it now: Windows hands a task the PATH from sign-in time,
+  # which misses anything installed since (yt-dlp and FFmpeg for the music, say).
+  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
   $node = Get-Command node.exe -ErrorAction SilentlyContinue
   if (-not $node) {
     Add-LogLine 'ERROR node.exe was not found: install Node 24 or later'

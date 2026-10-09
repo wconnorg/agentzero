@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { chicago, cleanTitle, createCalendar, header, lines, parseFeed, post, type RecentMessage } from "./calendar.ts";
+import {
+  chicago,
+  cleanTitle,
+  createCalendar,
+  lines,
+  parseFeed,
+  post,
+  type CalendarPost,
+  type RecentMessage,
+} from "./calendar.ts";
 import { log } from "./log.ts";
 
 const BOT = "100000000000000000";
+const ALERTS = "910000000000000000";
 /** Wednesday 7 October 2026, six in the morning in Chicago (daylight saving time). */
 const SIX_AM = Date.parse("2026-10-07T06:00:00-05:00");
 
@@ -17,16 +27,17 @@ const FEED = [FOMC, PMI, OIL, GERMANY, CLAIMS];
 const stamp = (date: string) => `<t:${Date.parse(date) / 1000}:t>`;
 
 /** A message in the channel; ids count up with time, as Discord's do. */
-const message = (id: number, createdTimestamp: number, authorId: string, content: string): RecentMessage => ({
+const message = (id: number, createdTimestamp: number, authorId: string, content: string, embedTitle?: string): RecentMessage => ({
   id: String(id),
   createdTimestamp,
   author: { id: authorId },
   content,
+  embeds: embedTitle ? [{ title: embedTitle }] : [],
 });
 
 /** A channel holding `history`, newest first, read a page at a time like Discord's. */
 function fakeChannel(history: RecentMessage[] = []) {
-  const sent: string[] = [];
+  const sent: CalendarPost[] = [];
   const pages: number[] = [];
   const channel = {
     name: "index-analysis",
@@ -37,8 +48,8 @@ function fakeChannel(history: RecentMessage[] = []) {
         return { values: () => page };
       },
     },
-    send: async ({ content }: { content: string }) => {
-      sent.push(content);
+    send: async (payload: CalendarPost) => {
+      sent.push(payload);
     },
   };
   return { channel, sent, pages };
@@ -107,7 +118,7 @@ describe("the feed", () => {
   });
 });
 
-describe("the day's lines", () => {
+describe("the day's post", () => {
   const day = chicago(SIX_AM);
   const events = parseFeed(FEED).events;
 
@@ -122,13 +133,29 @@ describe("the day's lines", () => {
     ]);
   });
 
-  it("says so when there is nothing, and cuts a long day to Discord's length", () => {
-    assert.equal(post(day, []), `${header(day)}\nNo red or orange folders today.`);
+  it("is an embed titled with the day, its bar colored by the worst folder, with the ping above it", () => {
+    const todays = lines(events, day, ["USD"]);
+    const pinged = post(day, todays, ALERTS);
+    assert.equal(pinged.content, `<@&${ALERTS}>`);
+    assert.deepEqual(pinged.allowedMentions, { parse: [], roles: [ALERTS] });
+    assert.deepEqual(pinged.embeds, [{ title: day.label, description: todays.join("\n"), color: 0xed4245 }]);
+
+    const orange = post(day, [todays[0]!]);
+    assert.equal(orange.content, undefined, "nothing to ping, nothing above the embed");
+    assert.deepEqual(orange.allowedMentions, { parse: [], roles: [] });
+    assert.equal(orange.embeds[0].color, 0xe67e22);
+
+    const quiet = post(day, []);
+    assert.equal(quiet.embeds[0].description, "No red or orange folders today.");
+    assert.equal(quiet.embeds[0].color, 0x99aab5);
+  });
+
+  it("cuts a long day to Discord's length", () => {
     const many = Array.from({ length: 80 }, (_, i) => `🔴 <t:1:t> ${"Event ".repeat(8)}${i}`);
-    const text = post(day, many);
-    assert.ok(text.length <= 2000, `${text.length} characters`);
-    assert.match(text, /\n… and \d+ more$/);
-    assert.ok(text.startsWith(`${header(day)}\n${many[0]}\n`));
+    const { description } = post(day, many).embeds[0];
+    assert.ok(description.length <= 2000, `${description.length} characters`);
+    assert.match(description, /\n… and \d+ more$/);
+    assert.ok(description.startsWith(`${many[0]}\n`));
   });
 });
 
@@ -138,13 +165,16 @@ describe("the daily post", () => {
     let clock = SIX_AM - 60_000;
     const { channel, sent, pages } = fakeChannel();
     const feed = fakeFeed(FEED);
-    const calendar = createCalendar(channel, BOT, ["USD"], { fetch: feed.fetchImpl, now: () => clock });
+    const calendar = createCalendar(channel, BOT, ["USD"], { fetch: feed.fetchImpl, now: () => clock, pingRoleId: ALERTS });
     await calendar.tick();
     assert.equal(sent.length, 0);
     assert.equal(pages.length, 0, "the channel is not read before the time");
     clock = SIX_AM;
     await calendar.tick();
-    assert.deepEqual(sent, [`${header(chicago(SIX_AM))}\n🟠 ${stamp(PMI.date)} ISM Services PMI\n🔴 ${stamp(FOMC.date)} FOMC Meeting Minutes`]);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0]?.content, `<@&${ALERTS}>`);
+    assert.equal(sent[0]?.embeds[0].title, chicago(SIX_AM).label);
+    assert.equal(sent[0]?.embeds[0].description, `🟠 ${stamp(PMI.date)} ISM Services PMI\n🔴 ${stamp(FOMC.date)} FOMC Meeting Minutes`);
     clock += 60_000;
     await calendar.tick();
     assert.equal(sent.length, 1);
@@ -155,7 +185,7 @@ describe("the daily post", () => {
   it("finds the post it already made today, after a restart, and posts again the next day", async (t) => {
     t.mock.method(log, "info", () => {});
     let clock = SIX_AM + 3 * 3_600_000;
-    const { channel, sent } = fakeChannel([message(2, SIX_AM + 1000, BOT, `${header(chicago(SIX_AM))}\n🔴 earlier today`)]);
+    const { channel, sent } = fakeChannel([message(2, SIX_AM + 1000, BOT, `<@&${ALERTS}>`, chicago(SIX_AM).label)]);
     const feed = fakeFeed(FEED);
     const calendar = createCalendar(channel, BOT, ["USD"], { fetch: feed.fetchImpl, now: () => clock });
     await calendar.tick();
@@ -163,15 +193,23 @@ describe("the daily post", () => {
     assert.equal(feed.reads(), 0);
     clock += 24 * 3_600_000;
     await calendar.tick();
-    assert.deepEqual(sent, [`${header(chicago(clock))}\n🔴 ${stamp(CLAIMS.date)} Unemployment Claims`]);
+    assert.equal(sent[0]?.embeds[0].title, chicago(clock).label);
+    assert.equal(sent[0]?.embeds[0].description, `🔴 ${stamp(CLAIMS.date)} Unemployment Claims`);
+  });
+
+  it("still recognises a post from before embeds, by its bold first line", async () => {
+    const { channel, sent } = fakeChannel([message(2, SIX_AM + 1000, BOT, `**${chicago(SIX_AM).label}**\n🔴 earlier today`)]);
+    const calendar = createCalendar(channel, BOT, ["USD"], { fetch: fakeFeed(FEED).fetchImpl, now: () => SIX_AM + 3_600_000 });
+    await calendar.tick();
+    assert.equal(sent.length, 0);
   });
 
   it("looks behind a busy day's chatter for its post, but no further back than the posting time", async (t) => {
     t.mock.method(log, "info", () => {});
     const noon = SIX_AM + 6 * 3_600_000;
     const chatter = Array.from({ length: 250 }, (_, i) => message(1000 - i, noon - i * 60_000, "200000000000000000", `chat ${i}`));
-    const ownPost = message(700, SIX_AM + 1000, BOT, `${header(chicago(SIX_AM))}\n🔴 earlier today`);
-    const yesterday = message(600, SIX_AM - 20 * 3_600_000, BOT, `${header(chicago(SIX_AM - 24 * 3_600_000))}\n🔴 old`);
+    const ownPost = message(700, SIX_AM + 1000, BOT, "", chicago(SIX_AM).label);
+    const yesterday = message(600, SIX_AM - 20 * 3_600_000, BOT, "", chicago(SIX_AM - 24 * 3_600_000).label);
     const busy = fakeChannel([...chatter, ownPost, yesterday]);
     const calendar = createCalendar(busy.channel, BOT, ["USD"], { fetch: fakeFeed(FEED).fetchImpl, now: () => noon });
     await calendar.tick();
@@ -188,7 +226,7 @@ describe("the daily post", () => {
 
   it("does not take someone else's message for its own post", async (t) => {
     t.mock.method(log, "info", () => {});
-    const { channel, sent } = fakeChannel([message(2, SIX_AM + 1000, "200000000000000000", header(chicago(SIX_AM)))]);
+    const { channel, sent } = fakeChannel([message(2, SIX_AM + 1000, "200000000000000000", "", chicago(SIX_AM).label)]);
     const calendar = createCalendar(channel, BOT, ["USD"], { fetch: fakeFeed(FEED).fetchImpl, now: () => SIX_AM });
     await calendar.tick();
     assert.equal(sent.length, 1);
@@ -200,7 +238,7 @@ describe("the daily post", () => {
     const { channel, sent } = fakeChannel();
     const calendar = createCalendar(channel, BOT, ["USD"], { fetch: fakeFeed(FEED).fetchImpl, now: () => friday });
     await calendar.tick();
-    assert.deepEqual(sent, [`${header(chicago(friday))}\nNo red or orange folders today.`]);
+    assert.equal(sent[0]?.embeds[0].description, "No red or orange folders today.");
 
     const saturday = Date.parse("2026-10-10T06:00:00-05:00");
     const quiet = fakeChannel();

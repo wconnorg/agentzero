@@ -7,9 +7,9 @@ describe("inviteUrl", () => {
     const url = new URL(inviteUrl("1234567890123456789"));
     assert.equal(url.origin + url.pathname, "https://discord.com/oauth2/authorize");
     assert.equal(url.searchParams.get("client_id"), "1234567890123456789");
-    assert.equal(url.searchParams.get("scope"), "bot");
-    // Manage Roles, View Channels, Send Messages, Read Message History, Add Reactions.
-    assert.equal(url.searchParams.get("permissions"), "268504128");
+    assert.equal(url.searchParams.get("scope"), "bot applications.commands");
+    // Manage Roles, View Channels, Send Messages, Read Message History, Add Reactions, Connect, Speak.
+    assert.equal(url.searchParams.get("permissions"), "271649856");
   });
 });
 
